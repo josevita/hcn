@@ -1,0 +1,709 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Quiz desde CSV</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; padding: 24px; }
+    .app { max-width: 980px; margin: 0 auto; }
+    .card { border: 1px solid rgba(127,127,127,.35); border-radius: 14px; padding: 18px; }
+    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .between { justify-content: space-between; }
+    .muted { opacity: .75; }
+    .badge {
+      display: inline-flex; align-items: center; gap: 8px;
+      border: 1px solid rgba(127,127,127,.35);
+      padding: 4px 10px; border-radius: 999px;
+      font-size: 12px; font-weight: 650;
+    }
+    h1 { margin: 0 0 10px; font-size: 22px; }
+    h2 { margin: 0 0 10px; font-size: 18px; }
+    p { margin: 10px 0; line-height: 1.45; }
+    .opts { margin-top: 12px; display: grid; gap: 10px; }
+    label.opt {
+      display: flex; gap: 10px; align-items: flex-start;
+      padding: 10px 12px; border-radius: 12px;
+      border: 1px solid rgba(127,127,127,.35);
+      cursor: pointer;
+    }
+    label.opt:hover { background: rgba(127,127,127,.10); }
+    input[type="radio"] { margin-top: 3px; }
+    .btns { margin-top: 14px; display: flex; gap: 10px; flex-wrap: wrap; }
+    button {
+      border: 1px solid rgba(127,127,127,.35);
+      background: rgba(127,127,127,.12);
+      padding: 10px 12px; border-radius: 12px;
+      cursor: pointer; font-weight: 700;
+    }
+    button.primary { background: rgba(0, 140, 255, .18); }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    .feedback {
+      margin-top: 14px;
+      padding: 12px; border-radius: 12px;
+      border: 1px solid rgba(127,127,127,.35);
+    }
+    .ok { border-color: rgba(0, 200, 80, .55); }
+    .bad { border-color: rgba(255, 80, 80, .55); }
+    .small { font-size: 13px; }
+    .divider { height: 1px; background: rgba(127,127,127,.35); margin: 16px 0; }
+    .review-item { padding: 12px 0; border-bottom: 1px dashed rgba(127,127,127,.35); }
+    .review-item:last-child { border-bottom: none; }
+    code { padding: 2px 6px; border-radius: 8px; background: rgba(127,127,127,.15); }
+    .controls { display: grid; gap: 12px; margin-top: 10px; }
+    .panel { padding: 12px; border-radius: 12px; border: 1px solid rgba(127,127,127,.35); }
+    select { padding: 10px 12px; border-radius: 12px; border: 1px solid rgba(127,127,127,.35); background: transparent; }
+    .inline { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    @media (max-width: 700px) { .grid2 { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+<div class="app">
+  <div class="card" id="screen"></div>
+</div>
+
+<script>
+/* =========================
+   TTS (Text-to-Speech) navegador
+   - Sin servicios externos
+   - Compat: Chrome/Edge/Android, Safari iOS/macOS, etc.
+========================= */
+let _ttsVoices = [];
+let _ttsWarned = false;
+
+function ttsSupported() {
+  return typeof window !== 'undefined' && 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window;
+}
+
+function ttsLoadVoices() {
+  if (!ttsSupported()) return;
+  _ttsVoices = window.speechSynthesis.getVoices() || [];
+}
+
+// Carga voces (algunos navegadores lo hacen async)
+if (ttsSupported()) {
+  ttsLoadVoices();
+  window.speechSynthesis.onvoiceschanged = ttsLoadVoices;
+}
+
+function ttsPickSpanishVoice() {
+  const v = _ttsVoices || [];
+  return (
+    v.find(x => (x.lang || '').toLowerCase() === 'es-es') ||
+    v.find(x => (x.lang || '').toLowerCase().startsWith('es')) ||
+    null
+  );
+}
+
+function ttsStop() {
+  if (ttsSupported()) window.speechSynthesis.cancel();
+}
+
+function ttsSpeak(text) {
+  if (!ttsSupported()) {
+    if (!_ttsWarned) {
+      _ttsWarned = true;
+      alert('Este navegador no soporta lectura en voz alta (Text-to-Speech).');
+    }
+    return;
+  }
+
+  const t = String(text || '').trim();
+  if (!t) return;
+
+  // Asegura voces (por si aún no estaban)
+  ttsLoadVoices();
+
+  // Para cualquier locución previa
+  window.speechSynthesis.cancel();
+
+  const u = new SpeechSynthesisUtterance(t);
+  u.lang = 'es-ES';
+
+  const voice = ttsPickSpanishVoice();
+  if (voice) u.voice = voice;
+
+  u.rate = 1;
+  u.pitch = 1;
+  u.volume = 1;
+
+  // Algunos navegadores necesitan un "tick" tras cancel()
+  setTimeout(() => {
+    try { window.speechSynthesis.speak(u); } catch (e) {}
+  }, 0);
+}
+
+/* =========================
+   Utils
+========================= */
+function parseDelimited(text, delimiter = ';') {
+  const rows = [];
+  let row = [];
+  let cur = '';
+  let inQuotes = false;
+
+  text = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    const next = text[i + 1];
+
+    if (ch === '"') {
+      if (inQuotes && next === '"') { cur += '"'; i++; }
+      else inQuotes = !inQuotes;
+      continue;
+    }
+    if (!inQuotes && ch === delimiter) { row.push(cur); cur = ''; continue; }
+    if (!inQuotes && ch === '\n') { row.push(cur); rows.push(row); row = []; cur = ''; continue; }
+    cur += ch;
+  }
+  row.push(cur);
+  rows.push(row);
+
+  return rows.filter(r => r.some(cell => String(cell).trim() !== ''));
+}
+
+function normCell(x) { return String(x ?? '').trim(); }
+function isX(x) {
+  const v = normCell(x).toLowerCase();
+  return v === 'x' || v === '';
+}
+const LETTERS = ['a','b','c','d'];
+
+function extractLeadingLetter(text) {
+  const s = normCell(text);
+  const m = s.match(/^([A-Da-d])\s*[\.\)]\s*/);
+  return m ? m[1].toLowerCase() : null;
+}
+function stripLeadingOption(text) {
+  const s = normCell(text);
+  return s.replace(/^[A-Da-d]\s*[\.\)]\s*/, '').trim();
+}
+
+function shuffle(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function escapeHtml(str) {
+  return String(str ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+
+function uid() {
+  return Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+
+function screenEl() { return document.getElementById('screen'); }
+
+function scoreOutOf10(correct, total) {
+  if (!total) return 0;
+  return Math.round((correct / total) * 10 * 100) / 100; // 2 decimales
+}
+
+/* =========================
+   CSV -> Questions
+   - La letra A/B/C/D SOLO interno
+   - En pantalla NO se muestra
+========================= */
+function buildQuestions(csvText) {
+  csvText = csvText.replace(/^\uFEFF/, '');
+  const rows = parseDelimited(csvText, ';');
+  if (rows.length < 2) throw new Error('El CSV no tiene filas suficientes.');
+
+  const header = rows[0].map(h => normCell(h));
+  const idx = (name) => header.findIndex(h => h.toLowerCase() === name.toLowerCase());
+
+  const iTema = idx('Tema');
+  const iPregunta = idx('Pregunta');
+  const iR1 = idx('Respuesta 1');
+  const iR2 = idx('Respuesta 2');
+  const iR3 = idx('Respuesta 3');
+  const iR4 = idx('Respuesta 4');
+  const iCorrecta = idx('Respuesta correcta');
+  const iPorque = idx('Porque');
+
+  const needed = [iTema,iPregunta,iR1,iR2,iR3,iR4,iCorrecta,iPorque];
+  if (needed.some(i => i === -1)) throw new Error('Cabecera inválida: faltan columnas esperadas.');
+
+  const questions = [];
+
+  for (let r = 1; r < rows.length; r++) {
+    const row = rows[r].slice();
+    while (row.length < header.length) row.push('');
+
+    const tema = normCell(row[iTema]);
+    const pregunta = normCell(row[iPregunta]);
+    if (!pregunta) continue;
+
+    const correctaRaw = normCell(row[iCorrecta]).toLowerCase();
+    let correctLetter = LETTERS.includes(correctaRaw) ? correctaRaw : null;
+
+    const porque = normCell(row[iPorque]);
+    const rawOpts = [row[iR1], row[iR2], row[iR3], row[iR4]].map(normCell);
+
+    const options = [];
+    for (let k = 0; k < 4; k++) {
+      if (isX(rawOpts[k])) continue;
+
+      const embedded = extractLeadingLetter(rawOpts[k]);
+      const sourceLetter = embedded ?? LETTERS[k];
+      const text = stripLeadingOption(rawOpts[k]) || rawOpts[k];
+
+      options.push({
+        id: uid(),
+        text,
+        sourceLetter, // interno
+      });
+    }
+
+    if (options.length === 1) correctLetter = options[0].sourceLetter;
+
+    let correctOptionId = null;
+    if (correctLetter) {
+      const found = options.find(o => o.sourceLetter === correctLetter);
+      if (found) correctOptionId = found.id;
+    }
+    if (!correctOptionId && options.length === 1) correctOptionId = options[0].id;
+
+    const shuffledOptions = shuffle(options);
+
+    questions.push({
+      tema,
+      pregunta,
+      options: shuffledOptions,
+      correctOptionId,
+      porque,
+    });
+  }
+
+  if (questions.length === 0) throw new Error('No se encontraron preguntas válidas en el CSV.');
+  return questions;
+}
+
+/* =========================
+   Modos
+========================= */
+function getThemes(allQuestions) {
+  const set = new Set();
+  for (const q of allQuestions) {
+    const t = normCell(q.tema);
+    if (t) set.add(t);
+  }
+
+  const collator = new Intl.Collator('es', {
+    numeric: true,       // <- clave: ordena 2 antes que 10
+    sensitivity: 'base'  // ignora mayúsculas/acentos en la comparación
+  });
+
+  return Array.from(set).sort((a, b) => collator.compare(a, b));
+}
+
+function makeQuizRandom33(allQuestions) {
+  return shuffle(allQuestions).slice(0, Math.min(33, allQuestions.length));
+}
+
+function makeQuizByThemeAll(allQuestions, theme) {
+  const filtered = allQuestions.filter(q => normCell(q.tema) === theme);
+  return shuffle(filtered);
+}
+
+function makeQuizAll(allQuestions) {
+  return shuffle(allQuestions);
+}
+
+/* =========================
+   UI
+========================= */
+function renderLoading(msg = 'Cargando…') {
+  screenEl().innerHTML = `
+    <div class="row between">
+      <h1>Quiz desde CSV</h1>
+      <span class="badge">Modos: 33 / Tema / Todas</span>
+    </div>
+    <p class="muted">${escapeHtml(msg)}</p>
+  `;
+}
+
+function renderError(err) {
+  screenEl().innerHTML = `
+    <div class="row between">
+      <h1>Quiz desde CSV</h1>
+      <span class="badge">CSV: <code>preguntas.csv</code></span>
+    </div>
+    <p><b>No pude cargar el CSV automáticamente.</b></p>
+    <p class="muted small">Motivo: ${escapeHtml(err)}</p>
+    <div class="divider"></div>
+    <p>Plan B (funciona incluso abriendo el HTML con doble clic):</p>
+    <div class="btns">
+      <input type="file" id="fileInput" accept=".csv,text/csv" />
+      <button class="primary" id="btnLoad">Cargar CSV</button>
+    </div>
+  `;
+
+  document.getElementById('btnLoad').addEventListener('click', async () => {
+    const inp = document.getElementById('fileInput');
+    if (!inp.files || !inp.files[0]) return;
+    const text = await inp.files[0].text();
+    const allQuestions = buildQuestions(text);
+    startApp(allQuestions);
+  });
+}
+
+function renderHome(state) {
+  const themes = state.themes;
+
+  screenEl().innerHTML = `
+    <div class="row between">
+      <h1>Quiz desde CSV</h1>
+      <span class="badge">Preguntas: ${state.allQuestions.length}</span>
+    </div>
+
+    <div class="controls">
+      <div class="panel">
+        <div class="row between">
+          <div class="row"><span class="badge">Modo</span></div>
+          <span class="muted small">Se barajan preguntas y opciones</span>
+        </div>
+
+        <div class="grid2" style="margin-top:10px;">
+          <label class="inline">
+            <input type="radio" name="mode" value="random" ${state.mode === 'random' ? 'checked' : ''}>
+            <b>Aleatorio (33)</b>
+          </label>
+
+          <label class="inline">
+            <input type="radio" name="mode" value="all" ${state.mode === 'all' ? 'checked' : ''}>
+            <b>Todas (todo el CSV)</b>
+          </label>
+
+          <label class="inline">
+            <input type="radio" name="mode" value="theme" ${state.mode === 'theme' ? 'checked' : ''}>
+            <b>Por tema (todas)</b>
+          </label>
+        </div>
+
+        <div id="themePicker" style="margin-top:12px; ${state.mode === 'theme' ? '' : 'display:none;'}">
+          <div class="muted small" style="margin-bottom:8px;">Elige tema:</div>
+          <select id="themeSelect">
+            ${themes.map(t => `<option value="${escapeHtml(t)}" ${t === state.selectedTheme ? 'selected' : ''}>${escapeHtml(t)}</option>`).join('')}
+          </select>
+        </div>
+
+        <div class="btns">
+          <button class="primary" id="btnStart">Empezar</button>
+          <button id="btnReload">Recargar CSV</button>
+        </div>
+
+        <div class="divider"></div>
+        <p class="small muted" style="margin:0;">
+          Al final verás: <b>nota /10</b>, total, aciertos y fallos.
+        </p>
+      </div>
+    </div>
+  `;
+
+  document.querySelectorAll('input[name="mode"]').forEach(el => {
+    el.addEventListener('change', (e) => {
+      state.mode = e.target.value;
+      renderHome(state);
+    });
+  });
+
+  const themeSelect = document.getElementById('themeSelect');
+  if (themeSelect) {
+    themeSelect.addEventListener('change', (e) => {
+      state.selectedTheme = e.target.value;
+    });
+  }
+
+  document.getElementById('btnReload').onclick = () => init();
+
+  document.getElementById('btnStart').onclick = () => {
+    if (state.mode === 'random') {
+      state.quiz = makeQuizRandom33(state.allQuestions);
+      state.modeLabel = 'Aleatorio (33)';
+    } else if (state.mode === 'all') {
+      state.quiz = makeQuizAll(state.allQuestions);
+      state.modeLabel = 'Todas (CSV)';
+    } else {
+      const theme = state.selectedTheme || state.themes[0];
+      state.selectedTheme = theme;
+      state.quiz = makeQuizByThemeAll(state.allQuestions, theme);
+      state.modeLabel = `Tema: ${theme}`;
+    }
+
+    state.index = 0;
+    state.answers = Array(state.quiz.length).fill(null);
+    state.correctCount = 0;
+    state.locked = false;
+
+    if (!state.quiz.length) {
+      alert('No hay preguntas para ese modo/tema.');
+      return;
+    }
+
+    renderQuestion(state);
+  };
+}
+
+function renderQuestion(state) {
+  const q = state.quiz[state.index];
+  const progress = `${state.index + 1} / ${state.quiz.length}`;
+
+  const optsHtml = q.options.length
+    ? q.options.map((o, idx) => `
+        <label class="opt">
+          <input type="radio" name="opt" value="${o.id}" ${state.locked ? 'disabled' : ''}>
+          <div><div><b>Opción ${idx + 1}.</b> ${escapeHtml(o.text)}</div></div>
+        </label>
+      `).join('')
+    : `<p class="muted small">Esta pregunta no tiene opciones (o venían como "x").</p>`;
+
+  const feedbackHtml = state.locked ? buildFeedbackHtml(q, state.answers[state.index]) : '';
+
+  screenEl().innerHTML = `
+    <div class="row between">
+      <div class="row">
+        <h2 style="margin:0;">Pregunta ${progress}</h2>
+        <span class="badge">Tema ${escapeHtml(q.tema || '?')}</span>
+        <span class="badge">${escapeHtml(state.modeLabel || '')}</span>
+      </div>
+      <div class="badge">Aciertos: ${state.correctCount}</div>
+    </div>
+
+    <p><b>${escapeHtml(q.pregunta)}</b></p>
+
+    <!-- Botones TTS -->
+    <div class="btns">
+      <button type="button" data-tts="question">Leer pregunta 🔊</button>
+      ${q.options.length ? `<button type="button" data-tts="options">Leer opciones 🔊</button>` : ''}
+      <button type="button" data-tts="stop">Parar ⏹️</button>
+    </div>
+
+    <div class="opts">${optsHtml}</div>
+
+    ${feedbackHtml}
+
+    <div class="btns">
+      <button class="primary" id="btnConfirm" ${state.locked ? 'disabled' : ''}>Confirmar</button>
+      <button id="btnNext" ${state.locked ? '' : 'disabled'}>${state.index + 1 === state.quiz.length ? 'Finalizar' : 'Siguiente'}</button>
+      <button id="btnQuit">Inicio</button>
+    </div>
+  `;
+
+  document.getElementById('btnQuit').onclick = () => {
+    ttsStop();
+    renderHome(state);
+  };
+
+  document.getElementById('btnConfirm').onclick = () => {
+    const chosen = document.querySelector('input[name="opt"]:checked');
+    const selectedId = chosen ? chosen.value : null;
+
+    state.answers[state.index] = selectedId;
+
+    const isCorrect = selectedId && q.correctOptionId && selectedId === q.correctOptionId;
+    if (isCorrect) state.correctCount++;
+
+    state.locked = true;
+    renderQuestion(state);
+  };
+
+  document.getElementById('btnNext').onclick = () => {
+    if (!state.locked) return;
+    ttsStop();
+    if (state.index + 1 >= state.quiz.length) renderEnd(state);
+    else { state.index++; state.locked = false; renderQuestion(state); }
+  };
+}
+
+function buildFeedbackHtml(q, selectedId) {
+  const selectedOpt = q.options.find(o => o.id === selectedId);
+  const correctOpt = q.options.find(o => o.id === q.correctOptionId);
+
+  const ok = selectedId && q.correctOptionId && selectedId === q.correctOptionId;
+  const cls = ok ? 'feedback ok' : 'feedback bad';
+
+  const selectedText = selectedOpt ? selectedOpt.text : '—';
+  const correctText = correctOpt ? correctOpt.text : '—';
+
+  return `
+    <div class="${cls}">
+      <div><b>${ok ? '✅ Correcto' : '❌ Incorrecto'}</b></div>
+      <div class="small">Tu respuesta: <b>${escapeHtml(selectedText)}</b></div>
+      <div class="small">Correcta: <b>${escapeHtml(correctText)}</b></div>
+
+      ${q.porque ? `
+        <div class="divider"></div>
+        <div class="small"><b>Explicación:</b> ${escapeHtml(q.porque)}</div>
+        <div class="btns">
+          <button type="button" data-tts="explanation">Explicar 🔊</button>
+          <button type="button" data-tts="stop">Parar ⏹️</button>
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+function renderEnd(state) {
+  ttsStop();
+
+  const total = state.quiz.length;
+  const correct = state.correctCount;
+  const wrong = total - correct;
+  const nota = scoreOutOf10(correct, total);
+
+  const review = state.quiz.map((q, i) => {
+    const selId = state.answers[i];
+    const selOpt = q.options.find(o => o.id === selId);
+    const correctOpt = q.options.find(o => o.id === q.correctOptionId);
+    const ok = selId && q.correctOptionId && selId === q.correctOptionId;
+
+    return `
+      <div class="review-item">
+        <div class="row between">
+          <div class="row">
+            <b>${i+1}.</b>
+            <span class="badge">Tema ${escapeHtml(q.tema || '?')}</span>
+          </div>
+          <div class="badge">${ok ? '✅' : '❌'}</div>
+        </div>
+        <p style="margin:8px 0;"><b>${escapeHtml(q.pregunta)}</b></p>
+        <p class="small" style="margin:6px 0;">Tu respuesta: <b>${escapeHtml(selOpt ? selOpt.text : '—')}</b></p>
+        <p class="small" style="margin:6px 0;">Correcta: <b>${escapeHtml(correctOpt ? correctOpt.text : '—')}</b></p>
+        ${q.porque ? `<p class="small muted" style="margin:6px 0;"><b>Explicación:</b> ${escapeHtml(q.porque)}</p>` : ''}
+      </div>
+    `;
+  }).join('');
+
+  screenEl().innerHTML = `
+    <div class="row between">
+      <h1>Resultado</h1>
+      <span class="badge">Nota: ${nota} / 10</span>
+    </div>
+
+    <div class="row" style="margin-top:8px;">
+      <span class="badge">Modo: ${escapeHtml(state.modeLabel || '')}</span>
+      <span class="badge">Total: ${total}</span>
+      <span class="badge">Aciertos: ${correct}</span>
+      <span class="badge">Fallos: ${wrong}</span>
+    </div>
+
+    <p class="muted">Puedes reiniciar manteniendo el modo, o volver a inicio para cambiarlo.</p>
+
+    <div class="btns">
+      <button class="primary" id="btnRestart">Reiniciar (mismo modo)</button>
+      <button id="btnHome">Inicio</button>
+    </div>
+
+    <div class="divider"></div>
+    <h2>Repaso</h2>
+    ${review}
+  `;
+
+  document.getElementById('btnRestart').onclick = () => {
+    if (state.mode === 'random') {
+      state.quiz = makeQuizRandom33(state.allQuestions);
+      state.modeLabel = 'Aleatorio (33)';
+    } else if (state.mode === 'all') {
+      state.quiz = makeQuizAll(state.allQuestions);
+      state.modeLabel = 'Todas (CSV)';
+    } else {
+      state.quiz = makeQuizByThemeAll(state.allQuestions, state.selectedTheme);
+      state.modeLabel = `Tema: ${state.selectedTheme}`;
+    }
+
+    state.index = 0;
+    state.answers = Array(state.quiz.length).fill(null);
+    state.correctCount = 0;
+    state.locked = false;
+    renderQuestion(state);
+  };
+
+  document.getElementById('btnHome').onclick = () => renderHome(state);
+}
+
+/* =========================
+   Event delegation para TTS
+   (más robusto que onclick inline)
+========================= */
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-tts]');
+  if (!btn) return;
+
+  const action = btn.getAttribute('data-tts');
+  const state = window.__appState;
+  const q = state?.quiz?.[state?.index];
+
+  if (action === 'stop') {
+    ttsStop();
+    return;
+  }
+  if (!q) return;
+
+  if (action === 'question') {
+    ttsSpeak(q.pregunta);
+  } else if (action === 'options') {
+    const text = (q.options || [])
+      .map((o, i) => `Opción ${i + 1}. ${o.text}`)
+      .join('. ');
+    ttsSpeak(text);
+  } else if (action === 'explanation') {
+    ttsSpeak(q.porque || '');
+  }
+});
+
+/* =========================
+   Boot
+========================= */
+function startApp(allQuestions) {
+  const themes = getThemes(allQuestions);
+
+  const state = {
+    allQuestions,
+    themes,
+    mode: 'random', // random | theme | all
+    selectedTheme: themes[0] || '',
+    modeLabel: 'Aleatorio (33)',
+
+    quiz: [],
+    index: 0,
+    locked: false,
+    answers: [],
+    correctCount: 0,
+  };
+
+  // Estado accesible al handler de eventos
+  window.__appState = state;
+
+  renderHome(state);
+}
+
+async function init() {
+  renderLoading('Intentando cargar "preguntas.csv" desde la misma carpeta…');
+  try {
+    const resp = await fetch('preguntas.csv', { cache: 'no-store' });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status} al cargar preguntas.csv`);
+    const text = await resp.text();
+    const allQuestions = buildQuestions(text);
+    startApp(allQuestions);
+  } catch (e) {
+    renderError(e?.message || String(e));
+  }
+}
+
+init();
+</script>
+</body>
+</html>
