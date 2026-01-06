@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Quiz desde CSV</title>
+  <title>Quiz de HCN para la inteligencia artificial</title>
   <style>
     :root { color-scheme: light dark; }
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; padding: 24px; }
@@ -212,6 +212,83 @@ function scoreOutOf10(correct, total) {
 }
 
 /* =========================
+   Preguntas Fallidas (localStorage)
+========================= */
+const FAILED_QUESTIONS_KEY = 'quiz_failed_questions';
+
+function getQuestionId(question) {
+  // Genera un ID único basado en tema + pregunta
+  return `${normCell(question.tema)}|||${normCell(question.pregunta)}`;
+}
+
+function getFailedQuestions() {
+  try {
+    const stored = localStorage.getItem(FAILED_QUESTIONS_KEY);
+    if (!stored) return [];
+    return JSON.parse(stored);
+  } catch (e) {
+    return [];
+  }
+}
+
+function saveFailedQuestion(question) {
+  const failed = getFailedQuestions();
+  const qId = getQuestionId(question);
+  
+  // Verificar si ya existe
+  if (failed.some(fq => getQuestionId(fq) === qId)) return;
+  
+  // Guardar la pregunta completa con sus opciones (guardando sourceLetter y text para reconstruir)
+  const optionsToSave = question.options.map(opt => ({
+    text: opt.text,
+    sourceLetter: opt.sourceLetter,
+  }));
+  
+  // Encontrar la opción correcta por sourceLetter
+  const correctOpt = question.options.find(o => o.id === question.correctOptionId);
+  const correctSourceLetter = correctOpt ? correctOpt.sourceLetter : null;
+  
+  failed.push({
+    tema: question.tema,
+    pregunta: question.pregunta,
+    options: optionsToSave,
+    correctSourceLetter: correctSourceLetter,
+    porque: question.porque,
+  });
+  
+  try {
+    localStorage.setItem(FAILED_QUESTIONS_KEY, JSON.stringify(failed));
+  } catch (e) {
+    console.error('Error guardando pregunta fallida:', e);
+  }
+}
+
+function removeFailedQuestion(question) {
+  const failed = getFailedQuestions();
+  const qId = getQuestionId(question);
+  
+  const filtered = failed.filter(fq => getQuestionId(fq) !== qId);
+  
+  try {
+    localStorage.setItem(FAILED_QUESTIONS_KEY, JSON.stringify(filtered));
+  } catch (e) {
+    console.error('Error eliminando pregunta fallida:', e);
+  }
+}
+
+function clearAllFailedQuestions() {
+  try {
+    localStorage.removeItem(FAILED_QUESTIONS_KEY);
+  } catch (e) {
+    console.error('Error limpiando preguntas fallidas:', e);
+  }
+}
+
+function getFailedQuestionsFromStorage() {
+  return getFailedQuestions();
+}
+
+/* =========================
    CSV -> Questions
    - La letra A/B/C/D SOLO interno
    - En pantalla NO se muestra
@@ -322,6 +399,34 @@ function makeQuizAll(allQuestions) {
   return shuffle(allQuestions);
 }
 
+function makeQuizFailed(allQuestions) {
+  const failed = getFailedQuestionsFromStorage();
+  if (failed.length === 0) return [];
+  
+  // Reconstruir las preguntas fallidas con IDs nuevos para las opciones
+  const reconstructed = failed.map(fq => {
+    const options = fq.options.map(opt => ({
+      id: uid(),
+      text: opt.text,
+      sourceLetter: opt.sourceLetter,
+    }));
+    
+    // Encontrar la opción correcta por sourceLetter
+    const correctOpt = options.find(o => o.sourceLetter === fq.correctSourceLetter);
+    const correctOptionId = correctOpt ? correctOpt.id : null;
+    
+    return {
+      tema: fq.tema,
+      pregunta: fq.pregunta,
+      options: shuffle(options),
+      correctOptionId,
+      porque: fq.porque,
+    };
+  });
+  
+  return shuffle(reconstructed);
+}
+
 /* =========================
    UI
 ========================= */
@@ -362,6 +467,8 @@ function renderError(err) {
 
 function renderHome(state) {
   const themes = state.themes;
+  const failedQuestions = getFailedQuestionsFromStorage();
+  const failedCount = failedQuestions.length;
 
   screenEl().innerHTML = `
     <div class="row between">
@@ -391,6 +498,11 @@ function renderHome(state) {
             <input type="radio" name="mode" value="theme" ${state.mode === 'theme' ? 'checked' : ''}>
             <b>Por tema (todas)</b>
           </label>
+
+          <label class="inline">
+            <input type="radio" name="mode" value="failed" ${state.mode === 'failed' ? 'checked' : ''} ${failedCount === 0 ? 'disabled' : ''}>
+            <b>Preguntas fallidas (${failedCount})</b>
+          </label>
         </div>
 
         <div id="themePicker" style="margin-top:12px; ${state.mode === 'theme' ? '' : 'display:none;'}">
@@ -401,8 +513,41 @@ function renderHome(state) {
         </div>
 
         <div class="btns">
-          <button class="primary" id="btnStart">Empezar</button>
+          <button class="primary" id="btnStart" ${state.mode === 'failed' && failedCount === 0 ? 'disabled' : ''}>Empezar</button>
           <button id="btnReload">Recargar CSV</button>
+        </div>
+
+        <div class="divider"></div>
+        <div class="panel" style="margin-top:12px;">
+          <div class="row between">
+            <div class="row"><span class="badge">Descargar preguntas</span></div>
+          </div>
+          <div class="btns" style="margin-top:10px;">
+            <button id="btnDownloadPDF">Descargar PDF</button>
+            <button id="btnDownloadCSV">Descargar CSV</button>
+          </div>
+        </div>
+
+        <div class="divider"></div>
+        <div class="panel" style="margin-top:12px;">
+          <div class="row between">
+            <div class="row"><span class="badge">Preguntas fallidas</span></div>
+            <span class="badge">${failedCount} guardadas</span>
+          </div>
+          ${failedCount > 0 ? `
+            <p class="small" style="margin-top:10px;">
+              Tienes <b>${failedCount}</b> pregunta${failedCount !== 1 ? 's' : ''} fallida${failedCount !== 1 ? 's' : ''} guardada${failedCount !== 1 ? 's' : ''} en memoria.
+              Se eliminarán automáticamente cuando las respondas correctamente.
+            </p>
+            <div class="btns" style="margin-top:10px;">
+              <button id="btnViewFailed">Ver preguntas fallidas</button>
+              <button id="btnClearFailed">Limpiar todas</button>
+            </div>
+          ` : `
+            <p class="small muted" style="margin-top:10px; margin-bottom:0;">
+              No hay preguntas fallidas guardadas. Las preguntas que falles se guardarán automáticamente.
+            </p>
+          `}
         </div>
 
         <div class="divider"></div>
@@ -429,6 +574,39 @@ function renderHome(state) {
 
   document.getElementById('btnReload').onclick = () => init();
 
+  document.getElementById('btnDownloadPDF').onclick = () => {
+    const link = document.createElement('a');
+    link.href = 'preguntas.pdf';
+    link.download = 'preguntas.pdf';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  document.getElementById('btnDownloadCSV').onclick = () => {
+    const link = document.createElement('a');
+    link.href = 'preguntas.csv';
+    link.download = 'preguntas.csv';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const btnViewFailed = document.getElementById('btnViewFailed');
+  if (btnViewFailed) {
+    btnViewFailed.onclick = () => renderFailedQuestions(state);
+  }
+
+  const btnClearFailed = document.getElementById('btnClearFailed');
+  if (btnClearFailed) {
+    btnClearFailed.onclick = () => {
+      if (confirm('¿Estás seguro de que quieres eliminar todas las preguntas fallidas guardadas?')) {
+        clearAllFailedQuestions();
+        renderHome(state);
+      }
+    };
+  }
+
   document.getElementById('btnStart').onclick = () => {
     if (state.mode === 'random') {
       state.quiz = makeQuizRandom33(state.allQuestions);
@@ -436,6 +614,9 @@ function renderHome(state) {
     } else if (state.mode === 'all') {
       state.quiz = makeQuizAll(state.allQuestions);
       state.modeLabel = 'Todas (CSV)';
+    } else if (state.mode === 'failed') {
+      state.quiz = makeQuizFailed(state.allQuestions);
+      state.modeLabel = 'Preguntas fallidas';
     } else {
       const theme = state.selectedTheme || state.themes[0];
       state.selectedTheme = theme;
@@ -514,7 +695,14 @@ function renderQuestion(state) {
     state.answers[state.index] = selectedId;
 
     const isCorrect = selectedId && q.correctOptionId && selectedId === q.correctOptionId;
-    if (isCorrect) state.correctCount++;
+    if (isCorrect) {
+      state.correctCount++;
+      // Si se responde correctamente, eliminar de preguntas fallidas si estaba guardada
+      removeFailedQuestion(q);
+    } else {
+      // Si se responde incorrectamente, guardar en preguntas fallidas
+      saveFailedQuestion(q);
+    }
 
     state.locked = true;
     renderQuestion(state);
@@ -554,6 +742,84 @@ function buildFeedbackHtml(q, selectedId) {
       ` : ''}
     </div>
   `;
+}
+
+function renderFailedQuestions(state) {
+  const failed = getFailedQuestionsFromStorage();
+  
+  if (failed.length === 0) {
+    screenEl().innerHTML = `
+      <div class="row between">
+        <h1>Preguntas Fallidas</h1>
+        <button id="btnBackHome">← Inicio</button>
+      </div>
+      <p class="muted">No hay preguntas fallidas guardadas.</p>
+    `;
+    document.getElementById('btnBackHome').onclick = () => renderHome(state);
+    return;
+  }
+
+  const failedList = failed.map((fq, idx) => {
+    const correctOpt = fq.options.find(o => o.sourceLetter === fq.correctSourceLetter);
+    const correctText = correctOpt ? correctOpt.text : '—';
+    
+    return `
+      <div class="review-item">
+        <div class="row between">
+          <div class="row">
+            <b>${idx + 1}.</b>
+            <span class="badge">Tema ${escapeHtml(fq.tema || '?')}</span>
+          </div>
+        </div>
+        <p style="margin:8px 0;"><b>${escapeHtml(fq.pregunta)}</b></p>
+        <p class="small" style="margin:6px 0;">Respuesta correcta: <b>${escapeHtml(correctText)}</b></p>
+        ${fq.porque ? `<p class="small muted" style="margin:6px 0;"><b>Explicación:</b> ${escapeHtml(fq.porque)}</p>` : ''}
+      </div>
+    `;
+  }).join('');
+
+  screenEl().innerHTML = `
+    <div class="row between">
+      <h1>Preguntas Fallidas</h1>
+      <div class="row">
+        <span class="badge">${failed.length} pregunta${failed.length !== 1 ? 's' : ''}</span>
+        <button id="btnBackHome">← Inicio</button>
+      </div>
+    </div>
+
+    <p class="muted">
+      Estas preguntas se eliminarán automáticamente cuando las respondas correctamente en cualquier test.
+    </p>
+
+    <div class="btns">
+      <button class="primary" id="btnPracticeFailed">Practicar preguntas fallidas</button>
+      <button id="btnClearAllFailed">Limpiar todas</button>
+    </div>
+
+    <div class="divider"></div>
+    <h2>Lista de preguntas fallidas</h2>
+    ${failedList}
+  `;
+
+  document.getElementById('btnBackHome').onclick = () => renderHome(state);
+  
+  document.getElementById('btnPracticeFailed').onclick = () => {
+    state.mode = 'failed';
+    state.quiz = makeQuizFailed(state.allQuestions);
+    state.modeLabel = 'Preguntas fallidas';
+    state.index = 0;
+    state.answers = Array(state.quiz.length).fill(null);
+    state.correctCount = 0;
+    state.locked = false;
+    renderQuestion(state);
+  };
+
+  document.getElementById('btnClearAllFailed').onclick = () => {
+    if (confirm('¿Estás seguro de que quieres eliminar todas las preguntas fallidas guardadas?')) {
+      clearAllFailedQuestions();
+      renderFailedQuestions(state);
+    }
+  };
 }
 
 function renderEnd(state) {
@@ -619,6 +885,9 @@ function renderEnd(state) {
     } else if (state.mode === 'all') {
       state.quiz = makeQuizAll(state.allQuestions);
       state.modeLabel = 'Todas (CSV)';
+    } else if (state.mode === 'failed') {
+      state.quiz = makeQuizFailed(state.allQuestions);
+      state.modeLabel = 'Preguntas fallidas';
     } else {
       state.quiz = makeQuizByThemeAll(state.allQuestions, state.selectedTheme);
       state.modeLabel = `Tema: ${state.selectedTheme}`;
