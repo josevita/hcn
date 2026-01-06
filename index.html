@@ -433,7 +433,7 @@ function makeQuizFailed(allQuestions) {
 function renderLoading(msg = 'Cargando…') {
   screenEl().innerHTML = `
     <div class="row between">
-      <h1>Quiz desde CSV</h1>
+      <h1>Quiz de HCN para la inteligencia artificial</h1>
       <span class="badge">Modos: 33 / Tema / Todas</span>
     </div>
     <p class="muted">${escapeHtml(msg)}</p>
@@ -443,7 +443,7 @@ function renderLoading(msg = 'Cargando…') {
 function renderError(err) {
   screenEl().innerHTML = `
     <div class="row between">
-      <h1>Quiz desde CSV</h1>
+      <h1>Quiz de HCN para la inteligencia artificial</h1>
       <span class="badge">CSV: <code>preguntas.csv</code></span>
     </div>
     <p><b>No pude cargar el CSV automáticamente.</b></p>
@@ -472,7 +472,7 @@ function renderHome(state) {
 
   screenEl().innerHTML = `
     <div class="row between">
-      <h1>Quiz desde CSV</h1>
+      <h1>Quiz de HCN para la inteligencia artificial</h1>
       <span class="badge">Preguntas: ${state.allQuestions.length}</span>
     </div>
 
